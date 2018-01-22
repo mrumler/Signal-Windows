@@ -1,23 +1,35 @@
-﻿using Signal_Windows.Lib;
+﻿using libsignalservice;
+using Microsoft.Extensions.Logging;
+using Signal_Windows.Lib;
 using Signal_Windows.Models;
 using Signal_Windows.ViewModels;
+using Signal_Windows.Views;
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using Windows.ApplicationModel.Core;
 using Windows.UI.Core;
+using Windows.UI.ViewManagement;
+using Windows.UI.Xaml;
+using Windows.UI.Xaml.Controls;
 
 namespace Signal_Windows
 {
     public class SignalWindowsFrontend : ISignalFrontend
     {
-        public CoreDispatcher Dispatcher { get; set; }
+        private readonly ILogger Logger = LibsignalLogging.CreateLogger<SignalWindowsFrontend>();
+        public CoreApplicationView View { get; set; }
         public ViewModelLocator Locator { get; set; }
-        public SignalWindowsFrontend(CoreDispatcher dispatcher, ViewModelLocator locator, int viewId)
+        public int ViewId { get; set; }
+        public ActivationViewSwitcher Switcher { get; set; }
+        public SignalWindowsFrontend(CoreApplicationView view, ViewModelLocator locator, int viewId, ActivationViewSwitcher switcher)
         {
-            Dispatcher = dispatcher;
+            View = view;
             Locator = locator;
+            ViewId = ViewId;
+            Switcher = switcher;
         }
         public void AddOrUpdateConversation(SignalConversation conversation, SignalMessage updateMessage)
         {
@@ -46,7 +58,19 @@ namespace Signal_Windows
 
         public void HandleAuthFailure()
         {
-            // TODO
+            Logger.LogInformation("HandleAuthFailure() {0}", View);
+            if (View.IsMain)
+            {
+                Frame f = (Frame) Window.Current.Content;
+                f.Navigate(typeof(StartPage));
+                View.CoreWindow.Activate();
+                ApplicationViewSwitcher.TryShowAsStandaloneAsync(App.MainViewId);
+            }
+            else
+            {
+                // kill this window!
+                View.CoreWindow.Close();
+            }
         }
     }
 }

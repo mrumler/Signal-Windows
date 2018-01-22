@@ -113,6 +113,7 @@ namespace Signal_Windows.ViewModels
 
         public async Task RefreshContacts(CancellationToken? cancellationToken = null)
         {
+            /*
             RefreshingContacts = true;
             Contacts.Clear();
             signalContacts.Clear();
@@ -212,6 +213,7 @@ namespace Signal_Windows.ViewModels
                 ContactsVisible = false;
             }
             RefreshingContacts = false;
+            */
         }
 
         private void SetAddEnabled()

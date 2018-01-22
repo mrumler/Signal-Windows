@@ -88,8 +88,7 @@ namespace Signal_Windows.ViewModels
             }
             catch(Exception ex)
             {
-                var line = new StackTrace(ex, true).GetFrames()[0].GetFileLineNumber();
-                Logger.LogError("RegisterButton_Click() failed in line {0}: {1}\n{2}", line, ex.Message, ex.StackTrace);
+                Logger.LogError("RegisterButton_Click() failed: {0}\n{1}", ex.Message, ex.StackTrace);
             }
         }
 

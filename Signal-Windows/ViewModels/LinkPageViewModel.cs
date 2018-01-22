@@ -70,14 +70,15 @@ namespace Signal_Windows.ViewModels
         {
             try
             {
+                /*
                 CancelSource = new CancellationTokenSource();
                 string deviceName = DeviceName;
                 LinkingTask = Task.Run(() =>
                 {
-                    /* clean the database from stale values */
+                    // clean the database from stale values
                     LibsignalDBContext.PurgeAccountData();
 
-                    /* prepare qrcode */
+                    // prepare qrcode
                     string password = Base64.encodeBytes(Util.getSecretBytes(18));
                     IdentityKeyPair tmpIdentity = KeyHelper.generateIdentityKeyPair();
                     SignalServiceAccountManager accountManager = new SignalServiceAccountManager(App.ServiceUrls, CancelSource.Token, "Signal-Windows");
@@ -108,17 +109,17 @@ namespace Signal_Windows.ViewModels
                     };
                     LibsignalDBContext.SaveOrUpdateSignalStore(store);
 
-                    /* reload registered state */
+                    // reload registered state
                     Windows.ApplicationModel.Core.CoreApplication.MainView.CoreWindow.Dispatcher.RunAsync(Windows.UI.Core.CoreDispatcherPriority.Normal, () =>
                     {
                         UIEnabled = false;
                         App.Store = store;
                     }).AsTask().Wait();
 
-                    /* create prekeys */
+                    // create prekeys
                     LibsignalDBContext.RefreshPreKeys(new SignalServiceAccountManager(App.ServiceUrls, store.Username, store.Password, (int)store.DeviceId, App.USER_AGENT));
 
-                    /* reload again with prekeys and their offsets */
+                    // reload again with prekeys and their offsets
                     store = LibsignalDBContext.GetSignalStore();
                     Windows.ApplicationModel.Core.CoreApplication.MainView.CoreWindow.Dispatcher.RunAsync(Windows.UI.Core.CoreDispatcherPriority.Normal, () =>
                     {
@@ -127,6 +128,7 @@ namespace Signal_Windows.ViewModels
                     }).AsTask().Wait();
                 });
                 await LinkingTask;
+                */
             }
             catch (Exception e)
             {

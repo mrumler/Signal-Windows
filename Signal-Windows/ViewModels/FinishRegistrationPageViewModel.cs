@@ -22,6 +22,7 @@ namespace Signal_Windows.ViewModels
         {
             try
             {
+                /*
                 await Task.Run(() =>
                 {
                     string SignalingKey = Base64.encodeBytes(Util.getSecretBytes(52));
@@ -47,18 +48,18 @@ namespace Signal_Windows.ViewModels
                         App.Store = store;
                     }).AsTask().Wait();
 
-                    /* create prekeys */
+                    // create prekeys
                     LibsignalDBContext.RefreshPreKeys(
                         new SignalServiceAccountManager(App.ServiceUrls, store.Username, store.Password, (int)store.DeviceId, App.USER_AGENT));
 
-                    /* reload again with prekeys and their offsets */
+                    // reload again with prekeys and their offsets
                     store = LibsignalDBContext.GetSignalStore();
                     Windows.ApplicationModel.Core.CoreApplication.MainView.CoreWindow.Dispatcher.RunAsync(Windows.UI.Core.CoreDispatcherPriority.Normal, () =>
                     {
                         App.Store = store;
                     }).AsTask().Wait();
                 });
-                View.Frame.Navigate(typeof(MainPage));
+                View.Frame.Navigate(typeof(MainPage));*/
             }
             catch (Exception e)
             {

@@ -31,13 +31,6 @@ namespace Signal_Windows
     {
         private static App Instance;
         private readonly ILogger Logger = LibsignalLogging.CreateLogger<App>();
-        public static string URL = "https://textsecure-service.whispersystems.org";
-        public static SignalServiceUrl[] ServiceUrls = new SignalServiceUrl[] { new SignalServiceUrl(URL, null) };
-        public static StorageFolder LocalCacheFolder = ApplicationData.Current.LocalCacheFolder;
-        public static SignalStore Store;
-        public static bool MainPageActive = false;
-        public static string USER_AGENT = "Signal-Windows";
-        public static uint PREKEY_BATCH_SIZE = 100;
         public static SignalLibHandle Handle = new SignalLibHandle(false);
         private Dictionary<int, SignalWindowsFrontend> Views = new Dictionary<int, SignalWindowsFrontend>();
         public static int MainViewId;
@@ -93,7 +86,7 @@ namespace Signal_Windows
             Logger.LogInformation("OnActivated() {0}", args.GetType());
             if (args is ToastNotificationActivatedEventArgs toastArgs)
             {
-                if (!CreateMainWindow(toastArgs.Argument))
+                if (!await CreateMainWindow(toastArgs.Argument))
                 {
                     if (args is IViewSwitcherProvider viewSwitcherProvider && viewSwitcherProvider.ViewSwitcher != null)
                     {
@@ -101,7 +94,7 @@ namespace Signal_Windows
                         int currentId = toastArgs.CurrentlyShownApplicationViewId;
                         if (viewSwitcherProvider.ViewSwitcher.IsViewPresentedOnActivationVirtualDesktop(toastArgs.CurrentlyShownApplicationViewId))
                         {
-                            await Views[currentId].Dispatcher.RunTaskAsync(() =>
+                            await Views[currentId].View.CoreWindow.Dispatcher.RunTaskAsync(() =>
                             {
                                 Logger.LogInformation("OnActivated() selecting conversation");
                                 Views[currentId].Locator.MainPageInstance.SelectConversation(toastArgs.Argument);
@@ -128,9 +121,7 @@ namespace Signal_Windows
         protected override async void OnLaunched(LaunchActivatedEventArgs e)
         {
             Logger.LogInformation("Launching ({0})", e.PreviousExecutionState);
-            Logger.LogDebug(LocalCacheFolder.Path);
-
-            if (!CreateMainWindow(null))
+            if (!await CreateMainWindow(null))
             {
                 ActivationViewSwitcher switcher = e.ViewSwitcher;
                 int currentId = e.CurrentlyShownApplicationViewId;
@@ -159,19 +150,30 @@ namespace Signal_Windows
                 var currView = ApplicationView.GetForCurrentView();
                 currView.Consolidated += CurrView_Consolidated;
                 newViewId = currView.Id;
-                await switcher.ShowAsStandaloneAsync(newViewId);
                 ViewModelLocator newVML = (ViewModelLocator)Resources["Locator"];
-                return new SignalWindowsFrontend(newView.Dispatcher, newVML, newViewId);
+                return new SignalWindowsFrontend(newView, newVML, newViewId, switcher);
             });
-            Views.Add(newViewId, frontend);
-            await newView.Dispatcher.RunTaskAsync(() =>
+            var success = await newView.Dispatcher.RunTaskAsync(async () =>
             {
-                Handle.AddFrontend(frontend.Dispatcher, frontend);
+                return Handle.AddFrontend(frontend.View.CoreWindow.Dispatcher, frontend);
             });
-            Logger.LogInformation("OnLaunched added view {0}", newViewId);
+            if (success)
+            {
+                Logger.LogInformation("OnLaunched() adding view {0}", newViewId);
+                Views.Add(newViewId, frontend);
+                await newView.Dispatcher.RunTaskAsync(async () =>
+                {
+                    await frontend.Switcher.ShowAsStandaloneAsync(newViewId);
+                });
+            }
+            else
+            {
+                Logger.LogInformation("OnLaunched() using MainView {0}", MainViewId);
+                await ApplicationViewSwitcher.TryShowAsStandaloneAsync(MainViewId);
+            }
         }
 
-        private bool CreateMainWindow(string conversationId)
+        private async Task<bool> CreateMainWindow(string conversationId)
         {
             Frame rootFrame = Window.Current.Content as Frame;
             if (rootFrame == null)
@@ -179,8 +181,9 @@ namespace Signal_Windows
                 rootFrame = new Frame();
                 rootFrame.NavigationFailed += OnNavigationFailed;
                 Window.Current.Content = rootFrame;
+                var currCoreView = CoreApplication.GetCurrentView();
                 var currView = ApplicationView.GetForCurrentView();
-                var frontend = new SignalWindowsFrontend(Window.Current.Dispatcher, (ViewModelLocator)Resources["Locator"], currView.Id);
+                var frontend = new SignalWindowsFrontend(currCoreView, (ViewModelLocator)Resources["Locator"], currView.Id, null);
                 Views.Add(currView.Id, frontend);
                 MainViewId = currView.Id;
 
@@ -196,15 +199,21 @@ namespace Signal_Windows
                 {
                     ApplicationViewSwitcher.DisableShowingMainViewOnActivation();
                     ApplicationViewSwitcher.DisableSystemViewActivationPolicy();
-                    rootFrame.Navigate(typeof(MainPage), conversationId);
-                    Window.Current.Activate();
                     TileUpdateManager.CreateTileUpdaterForApplication().Clear();
-                    var acquisition = Handle.Acquire(frontend.Dispatcher, frontend);
+                    bool dbRecordPresent = await Handle.Acquire(frontend.View.CoreWindow.Dispatcher, frontend);
+                    if (dbRecordPresent)
+                    {
+                        rootFrame.Navigate(typeof(MainPage), conversationId);
+                    }
+                    else
+                    {
+                        rootFrame.Navigate(typeof(StartPage));
+                    }
+                    Window.Current.Activate();
                 }
                 catch (Exception ex)
                 {
-                    var line = new StackTrace(ex, true).GetFrames()[0].GetFileLineNumber();
-                    Logger.LogError("OnLaunchedOrActivated() could not load signal handle: {0}: {1}\n{2}", line, ex.Message, ex.StackTrace);
+                    Logger.LogError("OnLaunchedOrActivated() could not load signal handle: {0}\n{1}", ex.Message, ex.StackTrace);
                     rootFrame.Navigate(typeof(StartPage));
                 }
                 return true;
@@ -216,7 +225,7 @@ namespace Signal_Windows
         {
             sender.Consolidated -= CurrView_Consolidated;
             var signalWindowsFrontend = Views[sender.Id];
-            Handle.RemoveFrontend(signalWindowsFrontend.Dispatcher);
+            Handle.RemoveFrontend(signalWindowsFrontend.View.CoreWindow.Dispatcher);
             Views.Remove(sender.Id);
             if (sender.Id != MainViewId)
             {

@@ -34,9 +34,12 @@ namespace Signal_Windows.Lib
         private readonly ILogger Logger = LibsignalLogging.CreateLogger<SignalLibHandle>();
         public SemaphoreSlim SemaphoreSlim = new SemaphoreSlim(1, 1);
         private bool Headless;
-        private bool Running = false;
+        private bool NotReleasing = false;
+        private bool Authenticated = false;
         private CancellationTokenSource CancelSource = new CancellationTokenSource();
-        private Dictionary<CoreDispatcher, ISignalFrontend> Frames = new Dictionary<CoreDispatcher, ISignalFrontend>();
+        private Dictionary<CoreDispatcher, ISignalFrontend> Windows = new Dictionary<CoreDispatcher, ISignalFrontend>();
+        private CoreDispatcher MainWindowDispatcher;
+        private ISignalFrontend MainWindow;
         private Task IncomingMessagesTask;
         private Task OutgoingMessagesTask;
         private SignalServiceMessagePipe Pipe;
@@ -51,23 +54,26 @@ namespace Signal_Windows.Lib
             Instance = this;
         }
 
-        public void AddFrontend(CoreDispatcher d, ISignalFrontend w)
+        public bool AddFrontend(CoreDispatcher d, ISignalFrontend w)
         {
+            bool success = false;
             Logger.LogTrace("AddFrontend() locking");
             SemaphoreSlim.Wait(CancelSource.Token);
             Logger.LogTrace("AddFrontend() locked");
-            if (Running)
+            if (NotReleasing && Authenticated)
             {
                 Logger.LogInformation("Registering frontend of dispatcher {0}", w.GetHashCode());
-                Frames.Add(d, w);
+                Windows.Add(d, w);
                 w.ReplaceConversationList(GetConversations());
+                success = true;
             }
             else
             {
-                Logger.LogInformation("Ignoring AddFrontend call, release in progress");
+                Logger.LogInformation("Ignoring AddFrontend call, release or registration in progress");
             }
             SemaphoreSlim.Release();
             Logger.LogTrace("AddFrontend() released");
+            return success;
         }
 
         public void RemoveFrontend(CoreDispatcher d)
@@ -76,7 +82,7 @@ namespace Signal_Windows.Lib
             SemaphoreSlim.Wait(CancelSource.Token);
             Logger.LogTrace("RemoveFrontend() locked");
             Logger.LogInformation("Unregistering frontend of dispatcher {0}", d.GetHashCode());
-            Frames.Remove(d);
+            Windows.Remove(d);
             SemaphoreSlim.Release();
             Logger.LogTrace("RemoveFrontend() released");
         }
@@ -91,7 +97,7 @@ namespace Signal_Windows.Lib
             Logger.LogTrace("PurgeAccountData() released");
         }
 
-        public async Task Acquire(CoreDispatcher d, ISignalFrontend w) //TODO wrap trycatch dispatch auth failure
+        public async Task<bool> Acquire(CoreDispatcher d, ISignalFrontend w)
         {
             Logger.LogTrace("Acquire() locking");
             CancelSource = new CancellationTokenSource();
@@ -101,9 +107,11 @@ namespace Signal_Windows.Lib
             {
                 return GetConversations(); // we want to display the conversations asap!
             });
+            MainWindowDispatcher = d;
+            MainWindow = w;
             Logger.LogDebug("Acquire() locked (global and local)");
             Instance = this;
-            Frames.Add(d, w);
+            Windows.Add(d, w);
             w.ReplaceConversationList(await getConversationsTask);
             var failTask = Task.Run(() =>
             {
@@ -113,14 +121,23 @@ namespace Signal_Windows.Lib
             {
                 return LibsignalDBContext.GetSignalStore();
             });
-            await Task.Run(() =>
+            if (Store == null)
+            {
+                return false;
+            }
+            else
+            {
+                Authenticated = true;
+            }
+            await failTask; // has to complete before messages are loaded
+            NotReleasing = true;
+            Task.Run(() =>
             {
                 InitNetwork();
             });
-            await failTask; // has to complete before messages are loaded
-            Running = true;
             Logger.LogTrace("Acquire() releasing");
             SemaphoreSlim.Release();
+            return true;
         }
 
         public async Task Reacquire()
@@ -129,11 +146,12 @@ namespace Signal_Windows.Lib
             CancelSource = new CancellationTokenSource();
             SemaphoreSlim.Wait(CancelSource.Token);
             LibUtils.Lock();
+            LibsignalDBContext.ClearSessionCache();
             Instance = this;
             await Task.Run(() =>
             {
                 List<Task> tasks = new List<Task>();
-                foreach (var f in Frames)
+                foreach (var f in Windows)
                 {
                     var conversations = GetConversations();
                     tasks.Add(f.Key.RunTaskAsync(() =>
@@ -144,17 +162,16 @@ namespace Signal_Windows.Lib
                 Task.WaitAll(tasks.ToArray());
                 InitNetwork();
             });
-            Running = true;
+            NotReleasing = true;
             Logger.LogTrace("Reacquire() releasing");
             SemaphoreSlim.Release();
         }
 
         public void Release()
         {
-            //TODO invalidate view information
             Logger.LogTrace("Release() locking");
             SemaphoreSlim.Wait(CancelSource.Token);
-            Running = false;
+            NotReleasing = false;
             CancelSource.Cancel();
             IncomingMessagesTask?.Wait();
             OutgoingMessagesTask?.Wait();
@@ -195,6 +212,25 @@ namespace Signal_Windows.Lib
         #endregion
 
         #region backend api
+        internal void DispatchHandleAuthFailure()
+        {
+            List<Task> operations = new List<Task>();
+            foreach (var dispatcher in Windows.Keys)
+            {
+                operations.Add(dispatcher.RunTaskAsync(() =>
+                {
+                    try
+                    {
+                        Windows[dispatcher].HandleAuthFailure();
+                    }
+                    catch(Exception e)
+                    {
+                        Logger.LogError("DispatchHandleAuthFailure failed: {0}\n{1}", e.Message, e.StackTrace);
+                    }
+                }));
+            }
+            Task.WaitAll(operations.ToArray());
+        }
         internal void SaveAndDispatchSignalMessage(SignalMessage message, SignalConversation conversation)
         {
             conversation.MessagesCount += 1;
@@ -216,11 +252,11 @@ namespace Signal_Windows.Lib
         internal void DispatchHandleIdentityKeyChange(LinkedList<SignalMessage> messages)
         {
             List<Task> operations = new List<Task>(); ;
-            foreach (var dispatcher in Frames.Keys)
+            foreach (var dispatcher in Windows.Keys)
             {
                 operations.Add(dispatcher.RunTaskAsync(() =>
                 {
-                    Frames[dispatcher].HandleIdentitykeyChange(messages);
+                    Windows[dispatcher].HandleIdentitykeyChange(messages);
                 }));
             }
             Task.WaitAll(operations.ToArray());
@@ -229,11 +265,11 @@ namespace Signal_Windows.Lib
         internal void DispatchAddOrUpdateConversation(SignalConversation conversation, SignalMessage updateMessage)
         {
             List<Task> operations = new List<Task>();
-            foreach (var dispatcher in Frames.Keys)
+            foreach (var dispatcher in Windows.Keys)
             {
                 operations.Add(dispatcher.RunTaskAsync(() =>
                 {
-                    Frames[dispatcher].AddOrUpdateConversation(conversation, updateMessage);
+                    Windows[dispatcher].AddOrUpdateConversation(conversation, updateMessage);
                 }));
             }
             Task.WaitAll(operations.ToArray());
@@ -242,11 +278,11 @@ namespace Signal_Windows.Lib
         internal void DispatchHandleMessage(SignalMessage message, SignalConversation conversation)
         {
             List<Task> operations = new List<Task>();
-            foreach (var dispatcher in Frames.Keys)
+            foreach (var dispatcher in Windows.Keys)
             {
                 operations.Add(dispatcher.RunTaskAsync(() =>
                 {
-                    Frames[dispatcher].HandleMessage(message, conversation);
+                    Windows[dispatcher].HandleMessage(message, conversation);
                 }));
             }
             Task.WaitAll(operations.ToArray());
@@ -266,11 +302,11 @@ namespace Signal_Windows.Lib
         internal void DispatchMessageUpdate(SignalMessage msg)
         {
             List<Task> operations = new List<Task>();
-            foreach (var dispatcher in Frames.Keys)
+            foreach (var dispatcher in Windows.Keys)
             {
                 operations.Add(dispatcher.RunTaskAsync(() =>
                 {
-                    Frames[dispatcher].HandleMessageUpdate(msg);
+                    Windows[dispatcher].HandleMessageUpdate(msg);
                 }));
             }
             Task.WaitAll(operations.ToArray());
@@ -336,11 +372,32 @@ namespace Signal_Windows.Lib
 
         private void InitNetwork()
         {
-            MessageReceiver = new SignalServiceMessageReceiver(CancelSource.Token, LibUtils.ServiceUrls, new StaticCredentialsProvider(Store.Username, Store.Password, Store.SignalingKey, (int)Store.DeviceId), LibUtils.USER_AGENT);
-            Pipe = MessageReceiver.createMessagePipe();
-            MessageSender = new SignalServiceMessageSender(CancelSource.Token, LibUtils.ServiceUrls, Store.Username, Store.Password, (int)Store.DeviceId, new Store(), Pipe, null, LibUtils.USER_AGENT);
-            IncomingMessagesTask = Task.Factory.StartNew(() => new IncomingMessages(CancelSource.Token, Pipe, this).HandleIncomingMessages(), TaskCreationOptions.LongRunning);
-            OutgoingMessagesTask = Task.Factory.StartNew(() => new OutgoingMessages(CancelSource.Token, MessageSender, this).HandleOutgoingMessages(), TaskCreationOptions.LongRunning);
+            try
+            {
+                MessageReceiver = new SignalServiceMessageReceiver(CancelSource.Token, LibUtils.ServiceUrls, new StaticCredentialsProvider(Store.Username, Store.Password, Store.SignalingKey, (int)Store.DeviceId), LibUtils.USER_AGENT);
+                Pipe = MessageReceiver.createMessagePipe();
+                MessageSender = new SignalServiceMessageSender(CancelSource.Token, LibUtils.ServiceUrls, Store.Username, Store.Password, (int)Store.DeviceId, new Store(), Pipe, null, LibUtils.USER_AGENT);
+                IncomingMessagesTask = Task.Factory.StartNew(() => new IncomingMessages(CancelSource.Token, Pipe, this).HandleIncomingMessages(), TaskCreationOptions.LongRunning);
+                OutgoingMessagesTask = Task.Factory.StartNew(() => new OutgoingMessages(CancelSource.Token, MessageSender, this).HandleOutgoingMessages(), TaskCreationOptions.LongRunning);
+            }
+            catch(Exception e)
+            {
+                Logger.LogError("InitNetwork failed: {0}\n{1}", e.Message, e.StackTrace);
+                HandleAuthFailure();
+            }
+        }
+
+        private void HandleAuthFailure()
+        {
+            Logger.LogTrace("HandleAuthFailureHandleAuthFailure() locking");
+            SemaphoreSlim.Wait(CancelSource.Token);
+            Logger.LogTrace("InitNetwork() locked");
+            Authenticated = false;
+            DispatchHandleAuthFailure();
+            Windows.Clear();
+            Windows.Add(MainWindowDispatcher, MainWindow);
+            SemaphoreSlim.Release();
+            Logger.LogTrace("HandleAuthFailure() released");
         }
         #endregion
     }

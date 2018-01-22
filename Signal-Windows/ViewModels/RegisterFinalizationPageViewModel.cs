@@ -64,7 +64,7 @@ namespace Signal_Windows.ViewModels
             IdentityKeyPair = KeyHelper.generateIdentityKeyPair();
             try
             {
-                AccountManager = await Task.Run(() => InitRegistration(false));
+                //AccountManager = await Task.Run(() => InitRegistration(false));
                 UIEnabled = true;
             }
             catch(Exception e)
@@ -76,11 +76,12 @@ namespace Signal_Windows.ViewModels
                 View.Frame.Navigate(typeof(RegisterPage));
             }
         }
-
+        /*
         private SignalServiceAccountManager InitRegistration(bool voice)
         {
+            
             App.Handle.PurgeAccountData();
-            SignalServiceAccountManager accountManager = new SignalServiceAccountManager(App.ServiceUrls, App.CurrentSignalWindowsFrontend(App.MainViewId).Locator.RegisterPageInstance.FinalNumber, Password, 1 /*device id isn't actually used*/, App.USER_AGENT);
+            SignalServiceAccountManager accountManager = new SignalServiceAccountManager(App.ServiceUrls, App.CurrentSignalWindowsFrontend(App.MainViewId).Locator.RegisterPageInstance.FinalNumber, Password, 1, App.USER_AGENT); //
             if (voice)
             {
                 accountManager.requestVoiceVerificationCode();
@@ -91,6 +92,7 @@ namespace Signal_Windows.ViewModels
             }
             return accountManager;
         }
+    */
 
         private void BackButton_Click(object sender, BackRequestedEventArgs e)
         {

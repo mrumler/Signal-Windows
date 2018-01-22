@@ -54,6 +54,18 @@ namespace Signal_Windows.Lib
             });
             return await taskCompletionSource.Task;
         }
+
+        /*
+        public static T RunFunc<T>(this CoreDispatcher dispatcher,
+            Func<T> func, CoreDispatcherPriority priority = CoreDispatcherPriority.Normal)
+        {
+            var taskCompletionSource = new TaskCompletionSource<bool>();
+            return dispatcher.RunAsync(priority, async () =>
+            {
+                return null;
+            }).AsTask().Result;
+        }
+        */
     }
 
     class LibUtils
